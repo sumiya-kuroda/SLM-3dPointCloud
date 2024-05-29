@@ -2,13 +2,10 @@ import numpy
 import os
 import time
 import matplotlib.pyplot as plt
-import screeninfo
-import pyglfw.pyglfw as glfw
-from OpenGL.GL import *
 import pycuda.driver as cuda_driver
-import pycuda.gl as cuda_gl
 from pycuda.compiler import SourceModule, DEFAULT_NVCC_FLAGS
 from pycuda import gpuarray
+import pycuda.autoinit # https://teratail.com/questions/128032
 
 cuda_code = """ 
         texture<unsigned char, 2> tex;
@@ -221,62 +218,19 @@ class SlmControl:
 Library openly available for non-commercial use at https://github.com/ppozzi/SLM-3dPointCloud.
 If used for academic purposes, please consider citing the appropriate literature (https://doi.org/10.3389/fncel.2021.609505, https://doi.org/10.3390/mps2010002))""")
 
-        self.screenID = screenID
-        if self.screenID is not None:
-            self.screenresolution = (screeninfo.get_monitors()[self.screenID].height,
-                                   screeninfo.get_monitors()[self.screenID].width)
-            if active_area_coords is None:
-                self.res = numpy.amin(numpy.asarray([screeninfo.get_monitors()[self.screenID].height,
-                                                     screeninfo.get_monitors()[self.screenID].width]))
-                self.position = (screeninfo.get_monitors()[self.screenID].x, 0)
-                self.aperture_position=(int((self.screenresolution[0]-self.res)/2),
-                                        int((self.screenresolution[1]-self.res)/2))
-            else:
-                self.res = (active_area_coords[2])
-                self.position = (screeninfo.get_monitors()[self.screenID].x, 0)
-                self.aperture_position = (active_area_coords[0],active_area_coords[1])
+        self.screenID = None
+        if active_area_coords is None:
+            self.res = 512
+            self.position = (0, 0)
         else:
-            if active_area_coords is None:
-                self.res = 512
-                self.position = (0, 0)
-            else:
-                self.res = active_area_coords[2]
-                self.position = (active_area_coords[0], active_area_coords[1])
-            self.aperture_position = (0, 0)
-            self.screenresolution = (self.res, self.res)
-        glfw.init()
-        glfw.Window.hint()
+            self.res = active_area_coords[2]
+            self.position = (active_area_coords[0], active_area_coords[1])
+        self.aperture_position = (0, 0)
+        self.screenresolution = (self.res, self.res)
 
-        if screenID!=None:
-            self.win = glfw.Window(self.screenresolution[1], self.screenresolution[0], "SLM",
-                                   glfw.get_monitors()[self.screenID])
-        else:
-            self.win = glfw.Window(self.screenresolution[1], self.screenresolution[0], "SLM",)
-            self.win.pos = self.position
-        self.win.make_current()
-        self.win.swap_interval(0)
         self.lut_edges = lut_edges
-        glViewport(0, 0, self.screenresolution[1], self.screenresolution[0])
-        glMatrixMode(GL_PROJECTION)
-        glLoadIdentity()
-        glOrtho(0, 1.0, 0, 1.0, -1.0, 1.0)
-        glMatrixMode(GL_MODELVIEW)
-        glLoadIdentity()
-        glEnable(GL_DEPTH_TEST)
-        glClearColor(1.0, 1.0, 1.0, 1.5)
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
-        glEnable(GL_TEXTURE_2D)
-        self.tex=glGenTextures(1)
-        glBindTexture(GL_TEXTURE_2D, self.tex)
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,
-                     self.screenresolution[1], self.screenresolution[0], 0, GL_RGBA, GL_UNSIGNED_BYTE, None)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
-
-
-        import pycuda.gl.autoinit
-        self.mod = SourceModule(cuda_code, options=DEFAULT_NVCC_FLAGS)
+        self.mod = SourceModule(cuda_code, options=DEFAULT_NVCC_FLAGS, keep=True)
         self.project_to_slm = self.mod.get_function("project_to_slm")
         self.project_to_spots_setup = self.mod.get_function("project_to_spots_setup")
         self.project_to_spots_end = self.mod.get_function("project_to_spots_end")
@@ -285,12 +239,6 @@ If used for academic purposes, please consider citing the appropriate literature
         self.project_to_spots_end_comp = self.mod.get_function("project_to_spots_end_comp")
         self.update_weights = self.mod.get_function("update_weights")
         self.fill_screen_output = self.mod.get_function("fill_screen_output")
-
-        self.pbo = glGenBuffers(1)
-        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self.pbo)
-        glBufferData(GL_PIXEL_UNPACK_BUFFER,
-                     self.screenresolution[1]*self.screenresolution[0]*4, None, GL_DYNAMIC_COPY)
-        self.cuda_pbo = pycuda.gl.RegisteredBuffer(int(self.pbo), cuda_gl.graphics_map_flags.WRITE_DISCARD)
 
         self.lam = wavelength_nm*0.001
         self.pix_size = pixel_size_um
@@ -344,7 +292,6 @@ If used for academic purposes, please consider citing the appropriate literature
         self.project_to_slm(spots_params_gpu, self.XC_gpu, self.YC_gpu, self.holo_real_gpu,
                             self.holo_imag_gpu, self.float_pars_gpu, int_pars_gpu,
                             block=(1024, 1, 1), grid=(int(self.PUP_NP/1024)+1, 1, 1))
-        self.draw_hologram()
         if get_perf:
             result = int_pars_gpu.get()
             T = time.perf_counter()-t
@@ -395,7 +342,6 @@ If used for academic purposes, please consider citing the appropriate literature
             self.project_to_slm(spots_params_gpu, self.XC_gpu, self.YC_gpu, self.holo_real_gpu,
                                 self.holo_imag_gpu, self.float_pars_gpu, int_pars_gpu,
                                 block=(1024, 1, 1), grid=(int(self.PUP_NP/1024)+1, 1, 1))
-        self.draw_hologram()
         if get_perf:
             result = int_pars_gpu.get()
             T = time.perf_counter()-t
@@ -446,7 +392,6 @@ If used for academic purposes, please consider citing the appropriate literature
             self.project_to_slm(spots_params_gpu, self.XC_gpu, self.YC_gpu, self.holo_real_gpu,
                                 self.holo_imag_gpu, self.float_pars_gpu, int_pars_gpu,
                                 block=(1024, 1, 1), grid=(int(self.PUP_NP/1024)+1, 1, 1))
-        self.draw_hologram()
         if get_perf:
             result = int_pars_gpu.get()
             T = time.perf_counter()-t
@@ -505,7 +450,6 @@ If used for academic purposes, please consider citing the appropriate literature
                 self.project_to_slm(spots_params_gpu, self.XC_gpu, self.YC_gpu, self.holo_real_gpu,
                                     self.holo_imag_gpu, self.float_pars_gpu, int_pars_gpu,
                                     block=(1024, 1, 1), grid=(int(self.PUP_NP / 1024) + 1, 1, 1))
-        self.draw_hologram()
         if get_perf:
             result = int_pars_gpu.get()
             T = time.perf_counter()-t
@@ -578,7 +522,6 @@ If used for academic purposes, please consider citing the appropriate literature
                 self.project_to_slm(spots_params_gpu, self.XC_gpu, self.YC_gpu, self.holo_real_gpu,
                                     self.holo_imag_gpu, self.float_pars_gpu, int_pars_gpu,
                                     block=(1024, 1, 1), grid=(int(self.PUP_NP / 1024) + 1, 1, 1))
-        self.draw_hologram()
         if get_perf:
             result = int_pars_gpu.get()
             T = time.perf_counter()-t
@@ -609,30 +552,3 @@ If used for academic purposes, please consider citing the appropriate literature
         phase = phase[self.pupil_coords]
         self.holo_real_gpu = gpuarray.to_gpu(numpy.cos(phase).astype("float32"))
         self.holo_imag_gpu = gpuarray.to_gpu(numpy.sin(phase).astype("float32"))
-        self.draw_hologram()
-
-    def draw_hologram(self):
-        tex_map = self.cuda_pbo.map()
-        data, sz = tex_map.device_ptr_and_size()
-        self.fill_screen_output(self.holo_real_gpu, self.holo_imag_gpu, self.screenpars_gpu,
-                                self.screen_pup_coords_x_gpu, self.screen_pup_coords_y_gpu, numpy.intp(data),
-                                block=(1024, 1, 1), grid=(int(self.PUP_NP/1024)+1, 1, 1))
-        tex_map.unmap()
-        glfw.poll_events()
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self.pbo)
-        glBindTexture(GL_TEXTURE_2D, self.pbo)
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0,
-                        self.screenresolution[1], self.screenresolution[0], GL_LUMINANCE, GL_UNSIGNED_BYTE, None);
-
-        glBegin(GL_QUADS)
-        glTexCoord2f(0, 1.0)
-        glVertex3f(0, 0, 0)
-        glTexCoord2f(0, 0)
-        glVertex3f(0, 1.0, 0)
-        glTexCoord2f(1.0, 0)
-        glVertex3f(1.0, 1.0, 0)
-        glTexCoord2f(1.0, 1.0)
-        glVertex3f(1.0, 0, 0)
-        glEnd()
-        self.win.swap_buffers()
