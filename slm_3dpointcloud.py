@@ -220,7 +220,7 @@ If used for academic purposes, please consider citing the appropriate literature
 
         self.screenID = None
         if active_area_coords is None:
-            self.res = 512
+            self.res = 1024
             self.position = (0, 0)
         else:
             self.res = active_area_coords[2]
@@ -243,7 +243,7 @@ If used for academic purposes, please consider citing the appropriate literature
         self.lam = wavelength_nm*0.001
         self.pix_size = pixel_size_um
         self.f = focal_mm*1000.0
-        self.blocksize_forward = 512
+        self.blocksize_forward = 512 # 1024
         XC, YC = numpy.meshgrid(numpy.linspace(-self.pix_size * self.res / 2, self.pix_size * self.res / 2, self.res),
                                 numpy.linspace(-self.pix_size * self.res / 2, self.pix_size * self.res / 2, self.res))
         RC2 = XC ** 2 + YC ** 2
